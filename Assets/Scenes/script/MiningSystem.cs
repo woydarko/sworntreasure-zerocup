@@ -12,9 +12,14 @@ public class SatisfyingMiner : MonoBehaviour
     public int minX = -10;
     public int maxX = 9;
 
+    [Header("Energy System")]
+    public TileBase energyTile; // Masukkan aset tile penambah energi di sini
+    public int energyRestoreAmount = 10; // Berapa banyak durabilitas yang kembali
+    [Range(0, 100)] public float energySpawnChance = 5f; // Peluang munculnya (misal 5%)
+
     [Header("Mining Delay System")]
-    public float initialDelay = 0.2f; // Dipercepat dikit biar responsif
-    public float repeatRate = 0.08f;  // Kecepatan spam yang lebih optimal
+    public float initialDelay = 0.2f; 
+    public float repeatRate = 0.08f;  
 
     [Header("Durability System")]
     public int maxDurability = 50;
@@ -24,7 +29,10 @@ public class SatisfyingMiner : MonoBehaviour
 
     [Header("Teleport & Reset")]
     public Vector3 spawnPosition = new Vector3(0, 0, 0);
-    public TileBase soilTile;
+    public TileBase soilTile;   // Slot untuk tanah biasa
+    public TileBase grassTile;  // Slot untuk tanah berrumput
+    public int surfaceY = -1;   // Koordinat Y untuk rumput
+    public int maxDepth = -50;  // Kedalaman maksimal reset
 
     private Vector3 targetPosition;
     private bool isProcessing = false;
@@ -37,11 +45,11 @@ public class SatisfyingMiner : MonoBehaviour
         currentDurability = maxDurability;
         UpdateUI();
         SnapToGrid();
+        ResetMap();
     }
 
     void Update()
     {
-        // Gunakan interpolasi yang lebih stabil
         if (transform.position != targetPosition)
         {
             transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
@@ -53,19 +61,52 @@ public class SatisfyingMiner : MonoBehaviour
         }
     }
 
-    // OPTIMASI: SetTilesBlock jauh lebih ringan daripada looping SetTile
     void ResetMap()
     {
-        BoundsInt bounds = groundTilemap.cellBounds;
+        int width = maxX - minX + 1;
+        int height = Mathf.Abs(maxDepth) + 6; 
+        
+        BoundsInt bounds = new BoundsInt(minX, maxDepth, 0, width, height, 1);
         TileBase[] tileArray = new TileBase[bounds.size.x * bounds.size.y * bounds.size.z];
 
-        for (int i = 0; i < tileArray.Length; i++)
+        int index = 0;
+
+        for (int z = 0; z < bounds.size.z; z++)
         {
-            tileArray[i] = soilTile;
+            for (int y = 0; y < bounds.size.y; y++)
+            {
+                int currentWorldY = bounds.yMin + y;
+
+                for (int x = 0; x < bounds.size.x; x++)
+                {
+                    if (currentWorldY == surfaceY)
+                    {
+                        tileArray[index] = grassTile;
+                    }
+                    else if (currentWorldY < surfaceY)
+                    {
+                        // MODIFIKASI: Logika acak untuk memunculkan Energy Tile
+                        float roll = Random.Range(0f, 100f);
+                        if (roll <= energySpawnChance && energyTile != null)
+                        {
+                            tileArray[index] = energyTile;
+                        }
+                        else
+                        {
+                            tileArray[index] = soilTile;
+                        }
+                    }
+                    else
+                    {
+                        tileArray[index] = null;
+                    }
+                    index++;
+                }
+            }
         }
 
+        groundTilemap.ClearAllTiles();
         groundTilemap.SetTilesBlock(bounds, tileArray);
-        // Memaksa refresh tilemap hanya sekali
         groundTilemap.RefreshAllTiles();
     }
 
@@ -128,13 +169,25 @@ public class SatisfyingMiner : MonoBehaviour
 
         if (groundTilemap.HasTile(targetGrid))
         {
+            // Ambil info Tile sebelum dihancurkan
+            TileBase hitTile = groundTilemap.GetTile(targetGrid);
+
             targetPosition = targetWorldPos;
-            
-            // Tunggu sedikit saja biar berasa nabrak
             yield return new WaitForSeconds(0.05f);
 
-            int cost = (targetGrid.y < depthThreshold) ? 2 : 1;
-            currentDurability -= cost;
+            // MODIFIKASI: Cek apakah yang dipukul adalah Energy Tile
+            if (hitTile == energyTile && energyTile != null)
+            {
+                currentDurability += energyRestoreAmount;
+                // Pastikan tidak melebihi batas maksimal
+                if (currentDurability > maxDurability) currentDurability = maxDurability;
+            }
+            else
+            {
+                int cost = (targetGrid.y < depthThreshold) ? 2 : 1;
+                currentDurability -= cost;
+            }
+
             if (currentDurability < 0) currentDurability = 0;
             UpdateUI();
 
@@ -154,8 +207,7 @@ public class SatisfyingMiner : MonoBehaviour
     void UpdateUI()
     {
         if (durabilityText == null) return;
-
-        durabilityText.text = $"Durability: {currentDurability} / {maxDurability}";
+        durabilityText.text = $"{currentDurability}";
         durabilityText.color = (currentDurability < 10) ? Color.red : Color.white;
     }
 
