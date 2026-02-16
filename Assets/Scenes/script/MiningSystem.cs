@@ -1,6 +1,6 @@
 using UnityEngine;
 using UnityEngine.Tilemaps;
-using UnityEngine.UI; // Wajib untuk UI
+using UnityEngine.UI;
 using System.Collections;
 
 public class SatisfyingMiner : MonoBehaviour
@@ -13,14 +13,18 @@ public class SatisfyingMiner : MonoBehaviour
     public int maxX = 9;
 
     [Header("Mining Delay System")]
-    public float initialDelay = 0.3f;
-    public float repeatRate = 0.1f;
+    public float initialDelay = 0.2f; // Dipercepat dikit biar responsif
+    public float repeatRate = 0.08f;  // Kecepatan spam yang lebih optimal
 
     [Header("Durability System")]
     public int maxDurability = 50;
     public int currentDurability;
-    public Text durabilityText; // Tarik objek UI Text ke sini nanti
-    public int depthThreshold = -20; // Di bawah kedalaman ini, makan 2 poin
+    public Text durabilityText; 
+    public int depthThreshold = -20;
+
+    [Header("Teleport & Reset")]
+    public Vector3 spawnPosition = new Vector3(0, 0, 0);
+    public TileBase soilTile;
 
     private Vector3 targetPosition;
     private bool isProcessing = false;
@@ -36,15 +40,48 @@ public class SatisfyingMiner : MonoBehaviour
     }
 
     void Update()
-{
-    transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
-
-    if (!isProcessing && Vector3.Distance(transform.position, targetPosition) < 0.01f)
     {
-        // Langsung panggil HandleInput tanpa dibungkus cek durability
-        HandleInput();
+        // Gunakan interpolasi yang lebih stabil
+        if (transform.position != targetPosition)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
+        }
+
+        if (!isProcessing && Vector3.Distance(transform.position, targetPosition) < 0.01f)
+        {
+            HandleInput();
+        }
     }
-}
+
+    // OPTIMASI: SetTilesBlock jauh lebih ringan daripada looping SetTile
+    void ResetMap()
+    {
+        BoundsInt bounds = groundTilemap.cellBounds;
+        TileBase[] tileArray = new TileBase[bounds.size.x * bounds.size.y * bounds.size.z];
+
+        for (int i = 0; i < tileArray.Length; i++)
+        {
+            tileArray[i] = soilTile;
+        }
+
+        groundTilemap.SetTilesBlock(bounds, tileArray);
+        // Memaksa refresh tilemap hanya sekali
+        groundTilemap.RefreshAllTiles();
+    }
+
+    public void TeleportToTop()
+    {
+        StopAllCoroutines();
+        isProcessing = false;
+        
+        targetPosition = spawnPosition;
+        transform.position = spawnPosition;
+
+        ResetMap();
+
+        currentDurability = maxDurability;
+        UpdateUI();
+    }
 
     void HandleInput()
     {
@@ -59,39 +96,29 @@ public class SatisfyingMiner : MonoBehaviour
     }
 
     void ProcessMiningInput(KeyCode key, Vector3Int direction)
-{
-    // 1. Tentukan koordinat tujuan
-    Vector3Int targetGrid = groundTilemap.WorldToCell(transform.position) + direction;
-    
-    // 2. CEK BATAS: Jika mau keluar frame X, langsung stop
-    if (targetGrid.x < minX || targetGrid.x > maxX) return;
-
-    // 3. LOGIKA FILTER: Cek apakah tujuan itu TANAH atau KOSONG
-    bool isTargetTile = groundTilemap.HasTile(targetGrid);
-
-    // Jika tujuannya adalah TANAH tapi durability habis, kita blokir di sini
-    if (isTargetTile && currentDurability <= 0)
     {
-        return; 
-    }
+        Vector3Int targetGrid = groundTilemap.WorldToCell(transform.position) + direction;
+        if (targetGrid.x < minX || targetGrid.x > maxX) return;
 
-    // 4. JIKA LOLOS FILTER (Berarti: Tujuannya Kosong ATAU Durability masih ada)
-    if (Time.time >= nextActionTime)
-    {
-        if (!isHolding || lastKey != key)
-        {
-            isHolding = true;
-            lastKey = key;
-            nextActionTime = Time.time + initialDelay;
-        }
-        else
-        {
-            nextActionTime = Time.time + repeatRate;
-        }
+        bool isTargetTile = groundTilemap.HasTile(targetGrid);
+        if (isTargetTile && currentDurability <= 0) return; 
 
-        StartCoroutine(MoveAndMine(direction));
+        if (Time.time >= nextActionTime)
+        {
+            if (!isHolding || lastKey != key)
+            {
+                isHolding = true;
+                lastKey = key;
+                nextActionTime = Time.time + initialDelay;
+            }
+            else
+            {
+                nextActionTime = Time.time + repeatRate;
+            }
+
+            StartCoroutine(MoveAndMine(direction));
+        }
     }
-}
 
     IEnumerator MoveAndMine(Vector3Int direction)
     {
@@ -101,24 +128,20 @@ public class SatisfyingMiner : MonoBehaviour
 
         if (groundTilemap.HasTile(targetGrid))
         {
-            // Double check: pastikan masih ada durability tepat sebelum gali
-            int cost = (targetGrid.y < depthThreshold) ? 2 : 1;
+            targetPosition = targetWorldPos;
             
-            if (currentDurability >= cost)
-            {
-                targetPosition = targetWorldPos;
-                while (Vector3.Distance(transform.position, targetPosition) > 0.15f) yield return null;
+            // Tunggu sedikit saja biar berasa nabrak
+            yield return new WaitForSeconds(0.05f);
 
-                currentDurability -= cost;
-                if (currentDurability < 0) currentDurability = 0;
-                UpdateUI();
+            int cost = (targetGrid.y < depthThreshold) ? 2 : 1;
+            currentDurability -= cost;
+            if (currentDurability < 0) currentDurability = 0;
+            UpdateUI();
 
-                groundTilemap.SetTile(targetGrid, null);
-            }
+            groundTilemap.SetTile(targetGrid, null);
         }
         else
         {
-            // Jika grid kosong, langsung pindah saja tanpa potong durability
             targetPosition = targetWorldPos;
         }
 
@@ -129,28 +152,13 @@ public class SatisfyingMiner : MonoBehaviour
     }
 
     void UpdateUI()
-{
-    if (durabilityText != null)
     {
-        // Menampilkan sisa durability
-        durabilityText.text = "Durability: " + currentDurability + " / " + maxDurability;
+        if (durabilityText == null) return;
 
-        // EFEK VISUAL: Berubah merah kalau sisa 1 digit (dibawah 10)
-        if (currentDurability < 10)
-        {
-            durabilityText.color = Color.red;
-            durabilityText.text = $"Durability: {currentDurability:00}";
-            // Opsi: Jika mau menghilangkan "/" saat sisa 1 digit, aktifkan baris bawah ini:
-            // durabilityText.text = "LOW DURABILITY: " + currentDurability;
-        }
-        else
-        {
-            durabilityText.color = Color.white;
-        }
+        durabilityText.text = $"Durability: {currentDurability} / {maxDurability}";
+        durabilityText.color = (currentDurability < 10) ? Color.red : Color.white;
     }
-}
 
-    // Sisanya (CheckGravity & SnapToGrid) tetap sama seperti sebelumnya
     void CheckGravity()
     {
         Vector3Int belowTile = groundTilemap.WorldToCell(transform.position) + Vector3Int.down;
