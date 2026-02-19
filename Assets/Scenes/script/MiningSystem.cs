@@ -11,15 +11,27 @@ public class SatisfyingMiner : MonoBehaviour
     [Header("Boundary Settings")]
     public int minX = -10;
     public int maxX = 9;
+    [Header("UI Windows")]
+public GameObject shopPanel; // Tarik objek ShopPanel kamu ke sini
+private bool isShopOpen = false;
 
     [Header("Energy System")]
-    public TileBase energyTile; // Masukkan aset tile penambah energi di sini
-    public int energyRestoreAmount = 10; // Berapa banyak durabilitas yang kembali
-    [Range(0, 100)] public float energySpawnChance = 5f; // Peluang munculnya (misal 5%)
+    public TileBase energyTile; 
+    public int energyRestoreAmount = 10; 
+    [Range(0, 100)] public float energySpawnChance = 0.2f; 
 
     [Header("Mining Delay System")]
     public float initialDelay = 0.2f; 
     public float repeatRate = 0.08f;  
+
+    [Header("Economy System")]
+    public TileBase goldTile;
+    [Range(0, 100)] public float goldSpawnChance = 5f; 
+    public TileBase diamondTile;
+    [Range(0, 100)] public float diamondSpawnChance = 1f;
+    public int currentPoints;
+    public Text scoreText;
+    private string SAVE_KEY = "TotalMoney";
 
     [Header("Durability System")]
     public int maxDurability = 50;
@@ -27,12 +39,21 @@ public class SatisfyingMiner : MonoBehaviour
     public Text durabilityText; 
     public int depthThreshold = -20;
 
+    [Header("Skin System")]
+    public SpriteRenderer characterRenderer; 
+    public Sprite[] availableSkins; 
+    public int[] skinPrices = { 0, 500, 1500 }; 
+    private int currentSkinIndex = 0;
+    // Variabel kunci untuk PlayerPrefs agar tidak Error CS0103
+    private string SKIN_OWNED_KEY = "SkinOwned_";
+    private string SELECTED_SKIN_KEY = "SelectedSkin";
+
     [Header("Teleport & Reset")]
     public Vector3 spawnPosition = new Vector3(0, 0, 0);
-    public TileBase soilTile;   // Slot untuk tanah biasa
-    public TileBase grassTile;  // Slot untuk tanah berrumput
-    public int surfaceY = -1;   // Koordinat Y untuk rumput
-    public int maxDepth = -50;  // Kedalaman maksimal reset
+    public TileBase soilTile;   
+    public TileBase grassTile;  
+    public int surfaceY = -1;   
+    public int maxDepth = -50;  
 
     private Vector3 targetPosition;
     private bool isProcessing = false;
@@ -43,9 +64,15 @@ public class SatisfyingMiner : MonoBehaviour
     void Start()
     {
         currentDurability = maxDurability;
+        
+        // Reset poin tiap masuk Playmode
+        PlayerPrefs.SetInt(SAVE_KEY, 0); 
+        currentPoints = 0;
+
         UpdateUI();
         SnapToGrid();
         ResetMap();
+        LoadSavedSkin(); // Memuat skin yang terakhir dipakai
     }
 
     void Update()
@@ -59,6 +86,10 @@ public class SatisfyingMiner : MonoBehaviour
         {
             HandleInput();
         }
+        if (Input.GetKeyDown(KeyCode.B))
+{
+    ToggleShop();
+}
     }
 
     void ResetMap()
@@ -70,13 +101,11 @@ public class SatisfyingMiner : MonoBehaviour
         TileBase[] tileArray = new TileBase[bounds.size.x * bounds.size.y * bounds.size.z];
 
         int index = 0;
-
         for (int z = 0; z < bounds.size.z; z++)
         {
             for (int y = 0; y < bounds.size.y; y++)
             {
                 int currentWorldY = bounds.yMin + y;
-
                 for (int x = 0; x < bounds.size.x; x++)
                 {
                     if (currentWorldY == surfaceY)
@@ -85,16 +114,16 @@ public class SatisfyingMiner : MonoBehaviour
                     }
                     else if (currentWorldY < surfaceY)
                     {
-                        // MODIFIKASI: Logika acak untuk memunculkan Energy Tile
                         float roll = Random.Range(0f, 100f);
-                        if (roll <= energySpawnChance && energyTile != null)
-                        {
+
+                        if (roll <= diamondSpawnChance && diamondTile != null) 
+                            tileArray[index] = diamondTile;
+                        else if (roll <= (diamondSpawnChance + goldSpawnChance) && goldTile != null) 
+                            tileArray[index] = goldTile;
+                        else if (roll <= (diamondSpawnChance + goldSpawnChance + energySpawnChance) && energyTile != null) 
                             tileArray[index] = energyTile;
-                        }
-                        else
-                        {
+                        else 
                             tileArray[index] = soilTile;
-                        }
                     }
                     else
                     {
@@ -104,7 +133,6 @@ public class SatisfyingMiner : MonoBehaviour
                 }
             }
         }
-
         groundTilemap.ClearAllTiles();
         groundTilemap.SetTilesBlock(bounds, tileArray);
         groundTilemap.RefreshAllTiles();
@@ -114,18 +142,16 @@ public class SatisfyingMiner : MonoBehaviour
     {
         StopAllCoroutines();
         isProcessing = false;
-        
         targetPosition = spawnPosition;
         transform.position = spawnPosition;
-
         ResetMap();
-
         currentDurability = maxDurability;
         UpdateUI();
     }
 
     void HandleInput()
     {
+        if (isShopOpen) return;
         if (Input.GetKey(KeyCode.S)) ProcessMiningInput(KeyCode.S, Vector3Int.down);
         else if (Input.GetKey(KeyCode.A)) ProcessMiningInput(KeyCode.A, Vector3Int.left);
         else if (Input.GetKey(KeyCode.D)) ProcessMiningInput(KeyCode.D, Vector3Int.right);
@@ -156,7 +182,6 @@ public class SatisfyingMiner : MonoBehaviour
             {
                 nextActionTime = Time.time + repeatRate;
             }
-
             StartCoroutine(MoveAndMine(direction));
         }
     }
@@ -166,20 +191,16 @@ public class SatisfyingMiner : MonoBehaviour
         isProcessing = true;
         Vector3Int targetGrid = groundTilemap.WorldToCell(transform.position) + direction;
         Vector3 targetWorldPos = groundTilemap.GetCellCenterWorld(targetGrid);
+        TileBase hitTile = groundTilemap.GetTile(targetGrid);
 
         if (groundTilemap.HasTile(targetGrid))
         {
-            // Ambil info Tile sebelum dihancurkan
-            TileBase hitTile = groundTilemap.GetTile(targetGrid);
-
             targetPosition = targetWorldPos;
             yield return new WaitForSeconds(0.05f);
 
-            // MODIFIKASI: Cek apakah yang dipukul adalah Energy Tile
-            if (hitTile == energyTile && energyTile != null)
+            if (energyTile != null && hitTile == energyTile)
             {
                 currentDurability += energyRestoreAmount;
-                // Pastikan tidak melebihi batas maksimal
                 if (currentDurability > maxDurability) currentDurability = maxDurability;
             }
             else
@@ -189,8 +210,11 @@ public class SatisfyingMiner : MonoBehaviour
             }
 
             if (currentDurability < 0) currentDurability = 0;
-            UpdateUI();
 
+            if (goldTile != null && hitTile == goldTile) AddPoints(5);
+            else if (diamondTile != null && hitTile == diamondTile) AddPoints(20);
+
+            UpdateUI();
             groundTilemap.SetTile(targetGrid, null);
         }
         else
@@ -199,16 +223,22 @@ public class SatisfyingMiner : MonoBehaviour
         }
 
         while (Vector3.Distance(transform.position, targetPosition) > 0.01f) yield return null;
-
         CheckGravity();
         isProcessing = false;
     }
 
+    void AddPoints(int amount) 
+    {
+        currentPoints += amount;
+        PlayerPrefs.SetInt(SAVE_KEY, currentPoints);
+        PlayerPrefs.Save();
+        UpdateUI();
+    }
+
     void UpdateUI()
     {
-        if (durabilityText == null) return;
-        durabilityText.text = $"{currentDurability}";
-        durabilityText.color = (currentDurability < 10) ? Color.red : Color.white;
+        if (durabilityText != null) durabilityText.text = $"{currentDurability}";
+        if (scoreText != null) scoreText.text = $"Points: {currentPoints}";
     }
 
     void CheckGravity()
@@ -226,4 +256,64 @@ public class SatisfyingMiner : MonoBehaviour
         targetPosition = groundTilemap.GetCellCenterWorld(gridPos);
         transform.position = targetPosition;
     }
+
+    // --- SKIN SYSTEM ---
+    public void BuyOrSelectSkin(int index)
+{
+    bool isOwned = PlayerPrefs.GetInt(SKIN_OWNED_KEY + index, 0) == 1 || index == 0;
+
+    if (isOwned)
+    {
+        EquipSkin(index); // Panggil ini untuk ganti visual
+    }
+    else if (currentPoints >= skinPrices[index])
+    {
+        currentPoints -= skinPrices[index];
+        PlayerPrefs.SetInt(SAVE_KEY, currentPoints);
+        PlayerPrefs.SetInt(SKIN_OWNED_KEY + index, 1);
+        
+        EquipSkin(index); // Panggil ini juga setelah beli
+        UpdateUI();
+    }
+}
+
+    void EquipSkin(int index)
+{
+    if (characterRenderer != null && index < availableSkins.Length)
+    {
+        currentSkinIndex = index;
+        characterRenderer.sprite = availableSkins[index]; // Ini yang mengubah visualnya
+        PlayerPrefs.SetInt(SELECTED_SKIN_KEY, index);
+        
+        // Debug untuk memastikan fungsi terpanggil
+        Debug.Log("Sprite berubah menjadi skin ke-" + index);
+    }
+    else
+    {
+        Debug.LogError("Gagal ganti skin! Cek apakah characterRenderer sudah diisi di Inspector.");
+    }
+}
+
+    void LoadSavedSkin()
+    {
+        int savedSkin = PlayerPrefs.GetInt(SELECTED_SKIN_KEY, 0);
+        EquipSkin(savedSkin);
+    }
+    public void ToggleShop()
+{
+    if (!isShopOpen && transform.position.y < (surfaceY - 0.5f)) 
+    {
+        Debug.Log("Kamu harus kembali ke permukaan untuk membuka Shop!");
+        return;
+    }
+    isShopOpen = !isShopOpen;
+    shopPanel.SetActive(isShopOpen);
+
+    // Opsional: Hentikan galian kalau shop lagi buka biar gak mati durab
+    if (isShopOpen)
+    {
+        isProcessing = false;
+        StopAllCoroutines();
+    }
+}
 }
