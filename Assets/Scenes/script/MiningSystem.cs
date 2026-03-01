@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.Tilemaps;
 using UnityEngine.UI;
 using System.Collections;
+using TMPro;
 
 public class SatisfyingMiner : MonoBehaviour
 {
@@ -19,6 +20,14 @@ private bool isShopOpen = false;
     public TileBase energyTile; 
     public int energyRestoreAmount = 10; 
     [Range(0, 100)] public float energySpawnChance = 0.2f; 
+    [Header("Audio Settings")]
+    public AudioSource bgmSource;      // Untuk musik latar (Looping)
+    public AudioSource sfxSource;      // Untuk suara sekali bunyi (SFX)
+    
+    public AudioClip digSound;         // Suara saat menggali tanah
+    public AudioClip buttonClickSound; // Suara saat klik tombol umum
+    public AudioClip buySuccessSound;  // Suara saat berhasil beli/ganti skin
+    public AudioClip alertErrorSound;  // Suara saat poin tidak cukup
 
     [Header("Mining Delay System")]
     public float initialDelay = 0.2f; 
@@ -42,19 +51,25 @@ private bool isShopOpen = false;
     [Header("Skin System")]
     public SpriteRenderer characterRenderer; 
     public Sprite[] availableSkins; 
-    public int[] skinPrices = { 0, 500, 1500 }; 
+    public int[] skinPrices = { 25, 50, 75 }; 
+    private Sprite originalDefaultSprite;
     private int currentSkinIndex = 0;
     // Variabel kunci untuk PlayerPrefs agar tidak Error CS0103
     private string SKIN_OWNED_KEY = "SkinOwned_";
     private string SELECTED_SKIN_KEY = "SelectedSkin";
+    [Header("UI Pop-up Settings")]
+    public GameObject alertPanel; // Seret objek Panel Alert kamu ke sini
+    public TMP_Text alertText;    // Seret teks di dalam Panel Alert ke sini
+    public float alertDuration = 2f; // Berapa lama alert muncul
 
     [Header("Teleport & Reset")]
     public Vector3 spawnPosition = new Vector3(0, 0, 0);
     public TileBase soilTile;   
     public TileBase grassTile;  
     public int surfaceY = -1;   
-    public int maxDepth = -50;  
-
+    public int maxDepth = -200;  
+[Header("Skin UI Settings")]
+public TMP_Text[] skinPriceTexts;
     private Vector3 targetPosition;
     private bool isProcessing = false;
     private float nextActionTime = 0f;
@@ -62,18 +77,37 @@ private bool isShopOpen = false;
     private bool isHolding = false;
 
     void Start()
-    {
-        currentDurability = maxDurability;
-        
-        // Reset poin tiap masuk Playmode
-        PlayerPrefs.SetInt(SAVE_KEY, 0); 
-        currentPoints = 0;
+{
+    // 1. Reset Scale
+    transform.localScale = new Vector3(1.66764f, 1.66764f, 1.66764f);
+    if (characterRenderer != null) originalDefaultSprite = characterRenderer.sprite;
+    
+    // 2. RESET SEMUA DATA (Poin, Kepemilikan Skin, dan Skin Terpilih)
+    // Ini akan menghapus semua memori dari sesi sebelumnya
+    PlayerPrefs.DeleteAll(); 
+    for (int i = 0; i < skinPriceTexts.Length; i++)
+        {
+            if (skinPriceTexts[i] != null)
+                skinPriceTexts[i].text = skinPrices[i] + " Points";
+        }
+    
+    // 3. Inisialisasi Ulang Variabel
+    currentPoints = 0;
+    currentDurability = maxDurability;
+    currentSkinIndex = 0; // Kembali ke skin default
+    if (bgmSource != null && !bgmSource.isPlaying)
+        {
+            bgmSource.Play();
+        }
 
-        UpdateUI();
-        SnapToGrid();
-        ResetMap();
-        LoadSavedSkin(); // Memuat skin yang terakhir dipakai
-    }
+    // 4. Update Visual & Map
+    UpdateUI();
+    SnapToGrid();
+    ResetMap();
+    
+    // Karena sudah di-DeleteAll, LoadSavedSkin akan otomatis memuat index 0 (default)
+    characterRenderer.sprite = originalDefaultSprite;
+}
 
     void Update()
     {
@@ -93,50 +127,62 @@ private bool isShopOpen = false;
     }
 
     void ResetMap()
+{
+    // Pastikan kita menggunakan nilai terbaru dari Inspector
+    // Jika maxDepth adalah -100, maka height akan menyesuaikan
+    int width = maxX - minX + 1;
+    
+    // Perhitungan tinggi yang absolut dari permukaan ke titik terdalam
+    int height = Mathf.Abs(surfaceY - maxDepth) + 10; 
+
+    // Tentukan bounds mulai dari titik paling negatif (maxDepth)
+    BoundsInt bounds = new BoundsInt(minX, maxDepth, 0, width, height, 1);
+    
+    TileBase[] tileArray = new TileBase[bounds.size.x * bounds.size.y * bounds.size.z];
+
+    int index = 0;
+    for (int y = 0; y < bounds.size.y; y++)
     {
-        int width = maxX - minX + 1;
-        int height = Mathf.Abs(maxDepth) + 6; 
-        
-        BoundsInt bounds = new BoundsInt(minX, maxDepth, 0, width, height, 1);
-        TileBase[] tileArray = new TileBase[bounds.size.x * bounds.size.y * bounds.size.z];
-
-        int index = 0;
-        for (int z = 0; z < bounds.size.z; z++)
+        for (int x = 0; x < bounds.size.x; x++)
         {
-            for (int y = 0; y < bounds.size.y; y++)
-            {
-                int currentWorldY = bounds.yMin + y;
-                for (int x = 0; x < bounds.size.x; x++)
-                {
-                    if (currentWorldY == surfaceY)
-                    {
-                        tileArray[index] = grassTile;
-                    }
-                    else if (currentWorldY < surfaceY)
-                    {
-                        float roll = Random.Range(0f, 100f);
+            int currentWorldY = bounds.yMin + y;
 
-                        if (roll <= diamondSpawnChance && diamondTile != null) 
-                            tileArray[index] = diamondTile;
-                        else if (roll <= (diamondSpawnChance + goldSpawnChance) && goldTile != null) 
-                            tileArray[index] = goldTile;
-                        else if (roll <= (diamondSpawnChance + goldSpawnChance + energySpawnChance) && energyTile != null) 
-                            tileArray[index] = energyTile;
-                        else 
-                            tileArray[index] = soilTile;
-                    }
-                    else
-                    {
-                        tileArray[index] = null;
-                    }
-                    index++;
-                }
+            if (currentWorldY == surfaceY)
+            {
+                tileArray[index] = grassTile;
             }
+            else if (currentWorldY < surfaceY)
+            {
+                // Bagian ini yang mengisi tanah (Foreground)
+                float roll = Random.Range(0f, 100f);
+
+                if (roll <= diamondSpawnChance && diamondTile != null) 
+                    tileArray[index] = diamondTile;
+                else if (roll <= (diamondSpawnChance + goldSpawnChance) && goldTile != null) 
+                    tileArray[index] = goldTile;
+                else if (roll <= (diamondSpawnChance + goldSpawnChance + energySpawnChance) && energyTile != null) 
+                    tileArray[index] = energyTile;
+                else 
+                    tileArray[index] = soilTile;
+            }
+            else
+            {
+                tileArray[index] = null;
+            }
+            index++;
         }
-        groundTilemap.ClearAllTiles();
-        groundTilemap.SetTilesBlock(bounds, tileArray);
-        groundTilemap.RefreshAllTiles();
     }
+
+    groundTilemap.ClearAllTiles();
+    groundTilemap.SetTilesBlock(bounds, tileArray);
+    
+    // Paksa update collider dan visual
+    groundTilemap.CompressBounds();
+    groundTilemap.RefreshAllTiles();
+    
+    // LOG BARU UNTUK CEK:
+    Debug.Log($"MAP GENERATED: Dari Y {bounds.yMin} sampai {bounds.yMax}. Total Height: {bounds.size.y}");
+}
 
     public void TeleportToTop()
     {
@@ -195,6 +241,7 @@ private bool isShopOpen = false;
 
         if (groundTilemap.HasTile(targetGrid))
         {
+            PlaySFX(digSound);
             targetPosition = targetWorldPos;
             yield return new WaitForSeconds(0.05f);
 
@@ -260,21 +307,43 @@ private bool isShopOpen = false;
     // --- SKIN SYSTEM ---
     public void BuyOrSelectSkin(int index)
 {
-    bool isOwned = PlayerPrefs.GetInt(SKIN_OWNED_KEY + index, 0) == 1 || index == 0;
+    PlaySFX(buttonClickSound);
+    Debug.Log("Mencoba beli/pilih skin index: " + index);
 
+    bool isOwned = PlayerPrefs.GetInt(SKIN_OWNED_KEY + index, 0) == 1;
+    if (isOwned)
+        {
+            PlaySFX(buySuccessSound); // Suara ganti skin
+            EquipSkin(index);
+        }
     if (isOwned)
     {
-        EquipSkin(index); // Panggil ini untuk ganti visual
+        EquipSkin(index);
+        // Pastikan semua yang sudah dimiliki tulisannya "OWNED"
+        skinPriceTexts[index].text = "OWNED"; 
     }
     else if (currentPoints >= skinPrices[index])
     {
+        PlaySFX(buySuccessSound);
         currentPoints -= skinPrices[index];
         PlayerPrefs.SetInt(SAVE_KEY, currentPoints);
         PlayerPrefs.SetInt(SKIN_OWNED_KEY + index, 1);
         
-        EquipSkin(index); // Panggil ini juga setelah beli
+        // LANGSUNG UBAH TEKS JADI OWNED
+        if (index < skinPriceTexts.Length)
+        {
+            skinPriceTexts[index].text = "OWNED";
+        }
+
+        EquipSkin(index);
         UpdateUI();
     }
+    else 
+        {
+            PlaySFX(alertErrorSound);
+            // TAMPILKAN ALERT KARENA POIN TIDAK CUKUP
+            ShowAlert("Points tidak cukup");
+        }
 }
 
     void EquipSkin(int index)
@@ -283,6 +352,7 @@ private bool isShopOpen = false;
     {
         currentSkinIndex = index;
         characterRenderer.sprite = availableSkins[index]; // Ini yang mengubah visualnya
+        transform.localScale = new Vector3(1.66764f, 1.66764f, 1.66764f);
         PlayerPrefs.SetInt(SELECTED_SKIN_KEY, index);
         
         // Debug untuk memastikan fungsi terpanggil
@@ -301,6 +371,7 @@ private bool isShopOpen = false;
     }
     public void ToggleShop()
 {
+    PlaySFX(buttonClickSound);
     if (!isShopOpen && transform.position.y < (surfaceY - 0.5f)) 
     {
         Debug.Log("Kamu harus kembali ke permukaan untuk membuka Shop!");
@@ -316,4 +387,29 @@ private bool isShopOpen = false;
         StopAllCoroutines();
     }
 }
+public void ShowAlert(string message)
+    {
+        if (alertPanel != null && alertText != null)
+        {
+            StopAllCoroutines(); // Hentikan alert sebelumnya jika ada yang sedang jalan
+            StartCoroutine(AlertRoutine(message));
+        }
+    }
+    IEnumerator AlertRoutine(string message)
+    {
+        alertText.text = message;
+        alertPanel.SetActive(true);
+        
+        yield return new WaitForSeconds(alertDuration);
+        
+        alertPanel.SetActive(false);
+    }
+    void PlaySFX(AudioClip clip)
+    {
+        if (sfxSource != null && clip != null)
+        {
+            sfxSource.PlayOneShot(clip);
+        }
+    }
+    
 }
