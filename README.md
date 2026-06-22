@@ -122,6 +122,7 @@ Current round covers **0G Chain + AI**. If we advance, the plan is to go deeper 
 - **Move AI to 0G Compute.** Replace OpenRouter with 0G's decentralized inference so artifact lore and the dog companion run on 0G infrastructure, not a third-party API. This closes the biggest gap and makes the "AI-native on 0G" claim literal.
 - **0G Storage for content.** Persist AI-generated lore, artifact metadata, and run history on 0G Storage so discoveries are permanent and shareable, not regenerated each time.
 - **On-chain artifacts as NFTs.** Mint rare finds (Ultra Rare / Mythical) as ERC-721 tokens on 0G Chain, with the AI lore stored on 0G Storage as the token metadata.
+- **Dog skins / breeds as NFTs.** Turn the existing skin system into ownable ERC-721 dog breeds on 0G Chain. Players own, equip, and trade their companion, with each breed's art and traits stored on 0G Storage.
 
 ### Later - depth and fairness
 
