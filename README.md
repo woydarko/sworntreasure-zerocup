@@ -124,6 +124,10 @@ Current round covers **0G Chain + AI**. If we advance, the plan is to go deeper 
 - **On-chain artifacts as NFTs.** Mint rare finds (Ultra Rare / Mythical) as ERC-721 tokens on 0G Chain, with the AI lore stored on 0G Storage as the token metadata.
 - **Dog skins / breeds as NFTs.** Turn the existing skin system into ownable ERC-721 dog breeds on 0G Chain. Players own, equip, and trade their companion, with each breed's art and traits stored on 0G Storage.
 
+### Content - a world of treasures
+
+- **Global artifact set.** Right now every artifact is Indonesian. Next round we broaden the pool into a worldwide collection (Egyptian, Mesoamerican, Mediterranean, East Asian, and more) so discoveries feel varied and universal instead of tied to a single culture. Pairs naturally with AI-generated lore, which can describe any artifact on the fly.
+
 ### Later - depth and fairness
 
 - **Provably fair loot** via on-chain verifiable randomness (VRF) so drop rates can't be gamed.
