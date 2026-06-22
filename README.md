@@ -1,173 +1,142 @@
 # Sworn Treasure
 
-Sworn Treasure is a casual 2D digging game made with Unity. You play as a small dog that digs underground, manages paw durability, collects points, and discovers Indonesian artifacts hidden at different depths.
+An AI-native, on-chain digging game built with Unity (WebGL) for **Zero Cup 2026** by 0G.
 
-The project was created as a student game project and focuses on simple gameplay, readable UI, resource management, and light cultural education through artifact discovery.
+You play as a treasure hunter digging deep underground, managing energy, uncovering ancient artifacts, and racing for a spot on a fully on-chain leaderboard powered by **0G Chain**. An AI companion reacts to your run in real time, and every artifact you find gets its own AI-generated lore.
 
-## Gameplay Overview
+> Honest note: this started as a student game project and was extended with Web3 + AI for the hackathon. It is a real, working prototype, not a mockup.
 
-The player starts on the surface with full energy. From there, the player can dig down, left, or right through a tile-based underground map. Each dig uses paw durability, so the player has to manage energy carefully while collecting points and looking for rare artifacts.
+---
 
-When the player finds an artifact, the game gives points, shows an alert with the artifact rarity color, and plays a dog bark sound as a reward feedback.
+## What makes it a 0G / AI-native app
 
-## Features
-
-- Grid-based 2D digging system
-- Paw durability / energy management
-- Points from gold, diamond, and artifact rewards
-- Indonesian artifact discovery system
-- Artifact rarity, depth range, chance, and reward values
-- Shop for buying energy and character skins
-- Info / Bag panel for artifact information
-- Back to Top button with gameplay conditions
-- Non-blocking alert UI
-- Digging sound effects and particle feedback
-- Dog bark sound when an artifact is found
-- WebGL-friendly UI scaling for itch.io
-
-## Controls
-
-| Input | Action |
+| Pillar | How it is used today |
 |---|---|
-| A | Dig / move left |
-| S | Dig / move down |
-| D | Dig / move right |
-| Shop Button | Open the shop when on the surface |
-| Info Button | Open artifact information |
-| Back to Top Button | Return to the surface when conditions are met |
+| **0G Chain** | Scores are written on-chain to a custom `SwornTreasureLeaderboard` smart contract on the 0G Galileo Testnet. The global leaderboard is read back directly from chain logs. No backend server. |
+| **AI (LLM)** | An AI archaeologist generates short lore for each artifact you find, and an AI dog companion reacts to your run (going deep, low energy, game over, etc.). |
+| **Wallet** | OKX wallet connect via an injected-provider bridge; the network auto-switches/adds 0G Galileo. |
 
-## Core Loop
+### Live contract
 
-1. Start on the surface.
-2. Dig underground tiles.
-3. Use energy with every dig.
-4. Collect points, energy, or artifacts.
-5. Go deeper to find rarer artifacts.
-6. Use Back to Top when energy runs out or the player is deep enough.
-7. Buy energy in the Shop.
-8. Dig again and repeat.
+- **Network:** 0G Galileo Testnet (chainId `16602` / `0x40DA`)
+- **Contract:** `0x348B2366132436b981055f0BE12484F27cba3E66`
+- **Explorer:** https://chainscan-galileo.0g.ai/address/0x348B2366132436b981055f0BE12484F27cba3E66
 
-## Artifact System
+---
 
-Artifacts are inspired by Indonesian cultural objects. Each artifact has its own rarity, recommended depth, spawn chance, and point reward.
+## Core gameplay loop
+
+1. Connect your wallet on the main menu (required to play).
+2. Dig down, left, or right through the tile-based underground. Every block costs energy; past depth 20 it costs double.
+3. Collect gold (+5) and artifacts (+30 to +100). Rarer artifacts hide deeper.
+4. Grab energy tiles, or surface and refill at the Shop for 50 points.
+5. **Decide:** tap **Submit Score** to lock your points on-chain, or keep digging for more.
+6. **The risk:** Submit Score is the *only* way to save. If you hit game over before submitting, your points are gone. Don't get greedy.
+
+That last point turns the on-chain write from a chore into a genuine risk-reward decision, which is the heart of the game.
+
+---
+
+## Artifacts
+
+Inspired by real Indonesian historical objects. Each has its own rarity, depth band, spawn chance, and reward.
 
 | Rarity | Artifact | Main Depth | Reward |
 |---|---|---:|---:|
-| Common | Pecahan Tembikar Trowulan | 0-40 | +30 |
-| Uncommon | Koin Gobog Wayang | 40-80 | +40 |
-| Rare | Kapak Corong Perunggu | 80-120 | +60 |
-| Ultra Rare | Arca Perunggu Ganesha | 120-150 | +75 |
-| Mythical | Bokor Emas Wonoboyo | 150-300 | +100 |
+| Common | Trowulan Pottery Shard | 0-40 | +30 |
+| Uncommon | Gobog Wayang Coin | 40-80 | +40 |
+| Rare | Bronze Funnel Axe | 80-120 | +60 |
+| Ultra Rare | Bronze Ganesha Statue | 120-150 | +75 |
+| Mythical | Wonoboyo Gold Bowl | 150-300 | +100 |
 
-## Rules and Conditions
+---
 
-- Shop can only be opened on the surface.
-- Back to Top can be used when energy is empty or the player is deeper than depth 50.
-- Back to Top does not automatically refill energy.
-- Energy can be restored from energy tiles or by buying energy in the Shop.
-- Alert UI should not block other buttons.
-- Artifact bark sounds only play when an artifact is found.
+## Architecture
 
-## Built With
+Unity WebGL talks to the browser (wallet + network) through a small JavaScript bridge (`.jslib`), since wallet extensions and `fetch` only exist in the browser layer.
 
-- Unity 2D
-- C#
-- Unity Tilemap
-- TextMesh Pro
-
-## Project Structure
-
-```text
-Assets/              Unity assets, scenes, scripts, sprites, audio, and prefabs
-Packages/            Unity package manifest
-ProjectSettings/     Unity project settings
-Flowchart_*.md/png   Gameplay and system flowcharts
-Proposal_*.md/docx   Project proposal documentation
+```
+Unity (C#)                       Browser (jslib)                 Network
+──────────                       ───────────────                 ───────
+ZeroGManager  ── ConnectWallet ─▶ window.okxwallet ───────────▶ 0G Galileo
+              ── SubmitScore ───▶ eth_sendTransaction ────────▶ Leaderboard contract
+              ◀─ OnLeaderboardData ── eth_getLogs ◀────────────  ScoreSubmitted events
+AIService     ── CallAI ────────▶ fetch(OpenRouter) ──────────▶ LLM
 ```
 
-## How to Run in Unity
+Key scripts:
 
-1. Clone this repository.
-2. Open the project folder in Unity.
-3. Open the main menu scene from `Assets/Scenes`.
-4. Press Play in the Unity Editor.
+- `ZeroGManager.cs` - wallet state, score submit, leaderboard fetch/parse (persists across scenes).
+- `ZeroGBridge.jslib` - browser bridge for wallet, transactions, chain logs, and AI calls.
+- `SwornTreasureLeaderboard.sol` - the on-chain leaderboard contract.
+- `AIService.cs` / `DogCompanion.cs` / `ArtifactLoreUI.cs` - AI lore + companion.
+- `InGameSubmitButton.cs` / `LeaderboardUI.cs` / `HowToPlayPanel.cs` - runtime-built UI.
+- `MiningSystem.cs` - the core digging, energy, shop, and artifact logic.
 
-Recommended Unity target:
+---
 
-```text
-Platform: Windows or WebGL
-Resolution: 1280 x 720
-Color Space: Gamma
+## Tech stack
+
+- Unity 6 (WebGL), C#
+- Solidity (0G Galileo EVM)
+- ethers.js + solc (contract compile & deploy)
+- OKX Wallet (injected EVM provider)
+- OpenRouter (LLM inference, current round)
+- Unity Tilemap, TextMesh Pro
+
+---
+
+## Running it
+
+### In the Unity Editor
+
+1. Open the project in Unity 6.
+2. Open `Assets/Scenes/main-menu.unity` and press Play. (Wallet/AI run only in real WebGL builds; the Editor uses safe fallbacks.)
+
+### WebGL build
+
+```
+Platform:           WebGL
+Managed Stripping:  Minimal   (SendMessage callbacks must not be stripped)
+Compression:        Disabled
+Canvas:             1280 x 720
+Color Space:        Gamma
 ```
 
-## Build Targets
+### Test locally
 
-### WebGL
-
-Used for playing directly on itch.io.
-
-Recommended settings:
-
-```text
-Platform: WebGL
-Default Canvas Width: 1280
-Default Canvas Height: 720
-Compression Format: Disabled
-Data Caching: On
+```bash
+cd <build-output-folder>
+python -m http.server 8080
+# open http://localhost:8080  (not file://, wallet needs a real origin)
 ```
 
-### Windows
+---
 
-Used for executable builds.
+## Roadmap
 
-Recommended settings:
+Current round covers **0G Chain + AI**. If we advance, the plan is to go deeper into the 0G stack and make the game properly AI-native end-to-end.
 
-```text
-Platform: Windows, Mac, Linux
-Target Platform: Windows
-Architecture: x86_64
-Fullscreen Mode: Windowed
-Default Screen Width: 1280
-Default Screen Height: 720
-```
+### Next round - go fully on 0G
 
-## Testing Notes
+- **Move AI to 0G Compute.** Replace OpenRouter with 0G's decentralized inference so artifact lore and the dog companion run on 0G infrastructure, not a third-party API. This closes the biggest gap and makes the "AI-native on 0G" claim literal.
+- **0G Storage for content.** Persist AI-generated lore, artifact metadata, and run history on 0G Storage so discoveries are permanent and shareable, not regenerated each time.
+- **On-chain artifacts as NFTs.** Mint rare finds (Ultra Rare / Mythical) as ERC-721 tokens on 0G Chain, with the AI lore stored on 0G Storage as the token metadata.
 
-Main tested areas:
+### Later - depth and fairness
 
-- Movement and digging
-- Energy usage and restoration
-- Point collection
-- Artifact reward and bark audio
-- Shop surface restriction
-- Back to Top conditions
-- Alert UI behavior
-- WebGL UI scaling
+- **Provably fair loot** via on-chain verifiable randomness (VRF) so drop rates can't be gamed.
+- **Seasonal leaderboards** with on-chain seasons and reward distribution to top players.
+- **Anti-cheat** score submission (commit-reveal or signed runs) so the leaderboard stays trustworthy.
+- **AI-generated artifact art** using 0G Compute image inference, so every artifact can look unique.
+- **Player economy** - a simple marketplace to trade minted artifacts.
 
-Known fixed issues:
-
-- Alert panel blocking other UI buttons
-- Shop opening one block below the surface
-- Back to Top being spammable on the surface
-- UI size mismatch in WebGL
-
-## Documentation
-
-This repository includes supporting project documents:
-
-- `Proposal_Sworn_Treasure_Revisi.md`
-- `Flowchart_Sworn_Treasure.md`
-- `flowchart_gameplay.png`
-- `flowchart_artefak.png`
-- `flowchart_backtotop.png`
+---
 
 ## Status
 
-Prototype / student project.
-
-The current version is playable and focuses on the main digging loop, artifact discovery, energy management, and UI feedback.
+Working prototype, submitted to Zero Cup 2026. Playable end to end: connect wallet, dig, submit on-chain, and view the global leaderboard.
 
 ## Author
 
 Nabil Pratama Hidayat
-
