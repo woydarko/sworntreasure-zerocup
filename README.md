@@ -140,4 +140,4 @@ Working prototype, submitted to Zero Cup 2026. Playable end to end: connect wall
 
 ## Author
 
-Nabil Pratama Hidayat
+Darko
