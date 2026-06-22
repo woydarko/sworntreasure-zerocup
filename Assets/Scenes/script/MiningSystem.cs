@@ -45,8 +45,8 @@ public class SatisfyingMiner : MonoBehaviour
     public int minX = -10;
     public int maxX = 9;
     [Header("UI Windows")]
-public GameObject shopPanel; // Tarik objek ShopPanel kamu ke sini
-private bool isShopOpen = false;
+    public GameObject shopPanel;
+    private bool isShopOpen = false;
 
     [Header("Energy System")]
     public TileBase energyTile; 
@@ -60,6 +60,7 @@ private bool isShopOpen = false;
     public AudioClip buttonClickSound; // Suara saat klik tombol umum
     public AudioClip buySuccessSound;  // Suara saat berhasil beli/ganti skin
     public AudioClip alertErrorSound;  // Suara saat poin tidak cukup
+    public AudioClip[] artifactBarkSounds; // Suara gonggong saat menemukan artefak
 
     [Header("Mining Delay System")]
     public float initialDelay = 0.2f; 
@@ -92,9 +93,9 @@ private bool isShopOpen = false;
     private string SKIN_OWNED_KEY = "SkinOwned_";
     private string SELECTED_SKIN_KEY = "SelectedSkin";
     [Header("UI Pop-up Settings")]
-    public GameObject alertPanel; // Seret objek Panel Alert kamu ke sini
-    public TMP_Text alertText;    // Seret teks di dalam Panel Alert ke sini
-    public float alertDuration = 2f; // Berapa lama alert muncul
+    public GameObject alertPanel;
+    public TMP_Text alertText;
+    public float alertDuration = 2f;
     private Coroutine alertCoroutine;
 
     [Header("Teleport & Reset")]
@@ -104,6 +105,11 @@ private bool isShopOpen = false;
     public int surfaceY = -1;   
     public int maxDepth = -300;  
     public int backToTopMinimumDepth = 50;
+
+    [Header("Game Over")]
+    public GameObject gameOverPanel;
+    public TMP_Text gameOverScoreText;
+    private bool isGameOver = false;
 
     [Header("Artifact System")]
     public TileBase[] artifactTiles = new TileBase[5];
@@ -134,22 +140,26 @@ public TMP_Text[] skinPriceTexts;
     private readonly Color darkTextColor = new Color(0.176f, 0.106f, 0.078f, 1f);
     private readonly Color lightTextColor = new Color(1f, 0.949f, 0.741f, 1f);
 
+    private bool firstDigDone = false;
+    private int lastDepthMilestone = 0;
+    private bool lowEnergyTriggered = false;
+
     void Start()
 {
-    // 1. Reset Scale
     transform.localScale = new Vector3(1.66764f, 1.66764f, 1.66764f);
     if (characterRenderer != null) originalDefaultSprite = characterRenderer.sprite;
     
-    // 2. RESET SEMUA DATA (Poin, Kepemilikan Skin, dan Skin Terpilih)
-    // Ini akan menghapus semua memori dari sesi sebelumnya
-    PlayerPrefs.DeleteAll(); 
+    // Preserve 0G tx hashes across resets
+    string savedZeroGHashes = PlayerPrefs.GetString("ZeroG_Hashes", "");
+    PlayerPrefs.DeleteAll();
+    if (!string.IsNullOrEmpty(savedZeroGHashes))
+        PlayerPrefs.SetString("ZeroG_Hashes", savedZeroGHashes);
     for (int i = 0; i < skinPriceTexts.Length; i++)
         {
             if (skinPriceTexts[i] != null)
                 skinPriceTexts[i].text = skinPrices[i] + " Points";
         }
     
-    // 3. Inisialisasi Ulang Variabel
     currentPoints = 0;
     currentDurability = maxDurability;
     currentSkinIndex = 0; // Kembali ke skin default
@@ -159,6 +169,7 @@ public TMP_Text[] skinPriceTexts;
         }
 
     InitializeArtifactDefaults();
+    ConfigureAlertAsNonBlocking();
 
     if (createBagUIOnStart)
     {
@@ -166,13 +177,18 @@ public TMP_Text[] skinPriceTexts;
     }
     CreateDigParticleSystem();
 
-    // 4. Update Visual & Map
     UpdateUI();
     SnapToGrid();
     ResetMap();
-    
-    // Karena sudah di-DeleteAll, LoadSavedSkin akan otomatis memuat index 0 (default)
+
     characterRenderer.sprite = originalDefaultSprite;
+
+    // Ensure the in-game on-chain submit button exists
+    if (FindObjectOfType<InGameSubmitButton>() == null)
+    {
+        GameObject submitGO = new GameObject("InGameSubmitButton");
+        submitGO.AddComponent<InGameSubmitButton>();
+    }
 }
 
     void Update()
@@ -256,31 +272,43 @@ public TMP_Text[] skinPriceTexts;
     groundTilemap.CompressBounds();
     groundTilemap.RefreshAllTiles();
     
-    // LOG BARU UNTUK CEK:
-    Debug.Log($"MAP GENERATED: Dari Y {bounds.yMin} sampai {bounds.yMax}. Total Height: {bounds.size.y}");
 }
 
     public void TeleportToTop()
     {
         int currentDepth = GetCurrentDepth();
-        if (currentDurability > 0 && currentDepth <= backToTopMinimumDepth)
+        if (currentDepth <= 0)
         {
             PlaySFX(alertErrorSound);
-            ShowAlert($"Back to Top tersedia saat energy habis atau depth > {backToTopMinimumDepth}");
+            ShowAlert("You're already on the surface!");
             return;
         }
 
+        if (currentDurability > 0 && currentDepth <= backToTopMinimumDepth)
+        {
+            PlaySFX(alertErrorSound);
+            ShowAlert($"Back to Top only works when energy is empty or depth > {backToTopMinimumDepth}!");
+            return;
+        }
+
+        HideAlertImmediate();
         StopAllCoroutines();
-        alertCoroutine = null;
         isProcessing = false;
         targetPosition = spawnPosition;
         transform.position = spawnPosition;
         ResetMap();
         UpdateUI();
+
+        // No auto-submit. Players must use the in-game "Submit Score" button before they risk digging again.
+        if (DogCompanion.Instance != null) DogCompanion.Instance.OnBackToSurface();
+        lowEnergyTriggered = false;
+        lastDepthMilestone = 0;
+        firstDigDone = false;
     }
 
     void HandleInput()
     {
+        if (isGameOver) return;
         if (isShopOpen) return;
         if (isBagOpen) return;
         if (Input.GetKey(KeyCode.S)) ProcessMiningInput(KeyCode.S, Vector3Int.down);
@@ -348,14 +376,51 @@ public TMP_Text[] skinPriceTexts;
             if (foundArtifact != null)
             {
                 AddPoints(foundArtifact.rewardPoints);
+                PlayArtifactBark();
                 PlaySFX(buySuccessSound);
-                ShowAlert($"Menemukan <color={foundArtifact.rarityColorHex}>{foundArtifact.artifactName}</color> +{foundArtifact.rewardPoints}");
+                ShowAlert($"Found <color={foundArtifact.rarityColorHex}>{foundArtifact.artifactName}</color> +{foundArtifact.rewardPoints} pts!");
+
+                if (AIService.Instance != null)
+                    AIService.Instance.RequestArtifactLore(foundArtifact.artifactName, foundArtifact.rarity, foundArtifact.description);
+                if (ArtifactLoreUI.Instance != null)
+                    ArtifactLoreUI.Instance.ShowPending(foundArtifact.artifactName);
+                if (DogCompanion.Instance != null)
+                    DogCompanion.Instance.OnArtifactFound(foundArtifact.artifactName);
             }
             else if (goldTile != null && hitTile == goldTile) AddPoints(5);
             else if (diamondTile != null && hitTile == diamondTile) AddPoints(20);
 
+            // First dig trigger
+            if (!firstDigDone)
+            {
+                firstDigDone = true;
+                if (DogCompanion.Instance != null) DogCompanion.Instance.OnFirstDig();
+            }
+
+            // Depth milestone trigger (every 50 depth)
+            int depth = GetCurrentDepth();
+            int milestone = (depth / 50) * 50;
+            if (milestone > 0 && milestone != lastDepthMilestone)
+            {
+                lastDepthMilestone = milestone;
+                if (DogCompanion.Instance != null) DogCompanion.Instance.OnDeepReached(depth);
+            }
+
+            // Low energy trigger (below 20%)
+            float energyPercent = (float)currentDurability / maxDurability;
+            if (energyPercent < 0.2f && !lowEnergyTriggered)
+            {
+                lowEnergyTriggered = true;
+                if (DogCompanion.Instance != null) DogCompanion.Instance.OnLowEnergy(currentDurability);
+            }
+            else if (energyPercent >= 0.2f)
+            {
+                lowEnergyTriggered = false;
+            }
+
             UpdateUI();
             groundTilemap.SetTile(targetGrid, null);
+            CheckGameOver();
         }
         else
         {
@@ -379,6 +444,45 @@ public TMP_Text[] skinPriceTexts;
     {
         if (durabilityText != null) durabilityText.text = $"{currentDurability}";
         if (scoreText != null) scoreText.text = $"Points: {currentPoints}";
+    }
+
+    void CheckGameOver()
+    {
+        if (isGameOver) return;
+        if (currentDurability > 0) return;
+        if (currentPoints >= energyPurchaseCost) return;
+
+        isGameOver = true;
+        isProcessing = true;
+        HideAlertImmediate();
+        StopAllCoroutines();
+
+        // No auto-submit on game over. If the player didn't submit before dying, the score is lost.
+        if (DogCompanion.Instance != null) DogCompanion.Instance.OnGameOver();
+
+        if (gameOverScoreText != null)
+            gameOverScoreText.text = $"Score: {currentPoints} pts";
+
+        if (gameOverPanel != null)
+            gameOverPanel.SetActive(true);
+    }
+
+    public void RestartGame()
+    {
+        isGameOver = false;
+        if (gameOverPanel != null) gameOverPanel.SetActive(false);
+        currentPoints = 0;
+        currentDurability = maxDurability;
+        firstDigDone = false;
+        lastDepthMilestone = 0;
+        lowEnergyTriggered = false;
+        HideAlertImmediate();
+        StopAllCoroutines();
+        isProcessing = false;
+        targetPosition = spawnPosition;
+        transform.position = spawnPosition;
+        ResetMap();
+        UpdateUI();
     }
 
     void CheckGravity()
@@ -483,8 +587,8 @@ public TMP_Text[] skinPriceTexts;
             new ArtifactData
             {
                 rarity = "Common",
-                artifactName = "Pecahan Tembikar Trowulan",
-                description = "Kepingan tanah liat sisa perabotan peninggalan Kerajaan Majapahit. Biasanya ditemukan di lapisan tanah dangkal.",
+                artifactName = "Trowulan Pottery Shard",
+                description = "A clay fragment left behind from the Majapahit Kingdom's daily life. Usually found close to the surface.",
                 rewardPoints = 30,
                 recommendedDepthMin = 0,
                 recommendedDepthMax = 40,
@@ -495,8 +599,8 @@ public TMP_Text[] skinPriceTexts;
             new ArtifactData
             {
                 rarity = "Uncommon",
-                artifactName = "Koin Gobog Wayang",
-                description = "Koin kuno berlubang di tengah dengan ukiran figur mirip wayang, digunakan sebagai alat tukar sekaligus jimat.",
+                artifactName = "Gobog Wayang Coin",
+                description = "An old coin with a hole in the center, engraved with wayang figures. Used as currency and a lucky charm.",
                 rewardPoints = 40,
                 recommendedDepthMin = 40,
                 recommendedDepthMax = 80,
@@ -507,8 +611,8 @@ public TMP_Text[] skinPriceTexts;
             new ArtifactData
             {
                 rarity = "Rare",
-                artifactName = "Kapak Corong Perunggu",
-                description = "Artefak prasejarah berbentuk kapak dengan bagian atas berongga untuk memasukkan gagang kayu.",
+                artifactName = "Bronze Funnel Axe",
+                description = "A prehistoric axe with a hollow socket at the top for fitting a wooden handle. Seriously old stuff.",
                 rewardPoints = 60,
                 recommendedDepthMin = 80,
                 recommendedDepthMax = 120,
@@ -519,8 +623,8 @@ public TMP_Text[] skinPriceTexts;
             new ArtifactData
             {
                 rarity = "Ultra Rare",
-                artifactName = "Arca Perunggu Ganesha",
-                description = "Patung kecil era klasik dari perunggu dengan detail ukiran rumit dan warna oksidasi tua.",
+                artifactName = "Bronze Ganesha Statue",
+                description = "A tiny classical-era bronze figure with intricate carvings and deep oxidation marks. Way too pretty to leave underground.",
                 rewardPoints = 75,
                 recommendedDepthMin = 120,
                 recommendedDepthMax = 150,
@@ -531,8 +635,8 @@ public TMP_Text[] skinPriceTexts;
             new ArtifactData
             {
                 rarity = "Mythical",
-                artifactName = "Bokor Emas Wonoboyo",
-                description = "Mangkuk emas berelief Ramayana dari salah satu penemuan harta karun terbesar di Jawa Tengah.",
+                artifactName = "Wonoboyo Gold Bowl",
+                description = "A gold bowl engraved with Ramayana reliefs, from one of the biggest treasure finds in Central Java. Absolutely legendary.",
                 rewardPoints = 100,
                 recommendedDepthMin = 150,
                 recommendedDepthMax = 300,
@@ -636,28 +740,31 @@ public TMP_Text[] skinPriceTexts;
     public void BuyOrSelectSkin(int index)
 {
     PlaySFX(buttonClickSound);
-    Debug.Log("Mencoba beli/pilih skin index: " + index);
 
     bool isOwned = PlayerPrefs.GetInt(SKIN_OWNED_KEY + index, 0) == 1;
     if (isOwned)
-        {
-            PlaySFX(buySuccessSound); // Suara ganti skin
-            EquipSkin(index);
-        }
-    if (isOwned)
     {
+        PlaySFX(buySuccessSound);
+        if (index < skinPriceTexts.Length) skinPriceTexts[index].text = "OWNED";
         EquipSkin(index);
-        // Pastikan semua yang sudah dimiliki tulisannya "OWNED"
-        skinPriceTexts[index].text = "OWNED"; 
+        return;
     }
     else if (currentPoints >= skinPrices[index])
     {
+        // Prevent soft-lock: if out of energy, buying this skin must not drop points
+        // below the energy refill cost, or the player gets stuck (can't dig, can't refill).
+        if (currentDurability <= 0 && (currentPoints - skinPrices[index]) < energyPurchaseCost)
+        {
+            PlaySFX(alertErrorSound);
+            ShowAlert("Refill your energy first!");
+            return;
+        }
+
         PlaySFX(buySuccessSound);
         currentPoints -= skinPrices[index];
         PlayerPrefs.SetInt(SAVE_KEY, currentPoints);
         PlayerPrefs.SetInt(SKIN_OWNED_KEY + index, 1);
-        
-        // LANGSUNG UBAH TEKS JADI OWNED
+
         if (index < skinPriceTexts.Length)
         {
             skinPriceTexts[index].text = "OWNED";
@@ -666,11 +773,10 @@ public TMP_Text[] skinPriceTexts;
         EquipSkin(index);
         UpdateUI();
     }
-    else 
+    else
         {
             PlaySFX(alertErrorSound);
-            // TAMPILKAN ALERT KARENA POIN TIDAK CUKUP
-            ShowAlert("Points tidak cukup");
+            ShowAlert("Not enough points!");
         }
 }
 
@@ -679,16 +785,9 @@ public TMP_Text[] skinPriceTexts;
     if (characterRenderer != null && index < availableSkins.Length)
     {
         currentSkinIndex = index;
-        characterRenderer.sprite = availableSkins[index]; // Ini yang mengubah visualnya
+        characterRenderer.sprite = availableSkins[index];
         transform.localScale = new Vector3(1.66764f, 1.66764f, 1.66764f);
         PlayerPrefs.SetInt(SELECTED_SKIN_KEY, index);
-        
-        // Debug untuk memastikan fungsi terpanggil
-        Debug.Log("Sprite berubah menjadi skin ke-" + index);
-    }
-    else
-    {
-        Debug.LogError("Gagal ganti skin! Cek apakah characterRenderer sudah diisi di Inspector.");
     }
 }
 
@@ -700,9 +799,11 @@ public TMP_Text[] skinPriceTexts;
 public void ToggleShop()
 {
     PlaySFX(buttonClickSound);
-    if (!isShopOpen && transform.position.y < (surfaceY - 0.5f)) 
+    if (!isShopOpen && GetCurrentDepth() > 0) 
     {
-        Debug.Log("Kamu harus kembali ke permukaan untuk membuka Shop!");
+        Debug.Log("You need to go back to the surface to open the Shop!");
+        PlaySFX(alertErrorSound);
+        ShowAlert("Shop is only available on the surface!");
         return;
     }
 
@@ -717,10 +818,10 @@ public void ToggleShop()
         shopPanel.SetActive(isShopOpen);
     }
 
-    // Opsional: Hentikan galian kalau shop lagi buka biar gak mati durab
     if (isShopOpen)
     {
         isProcessing = false;
+        HideAlertImmediate();
         StopAllCoroutines();
     }
 }
@@ -731,14 +832,14 @@ public void ToggleShop()
         if (currentDurability >= maxDurability)
         {
             PlaySFX(alertErrorSound);
-            ShowAlert("Energy sudah penuh");
+            ShowAlert("Energy is already full!");
             return;
         }
 
         if (currentPoints < energyPurchaseCost)
         {
             PlaySFX(alertErrorSound);
-            ShowAlert("Points tidak cukup");
+            ShowAlert("Not enough points!");
             return;
         }
 
@@ -755,7 +856,7 @@ public void ToggleShop()
         PlayerPrefs.Save();
         PlaySFX(buySuccessSound);
         UpdateUI();
-        ShowAlert($"+{restoredAmount} Energy");
+        ShowAlert($"+{restoredAmount} energy restored!");
     }
 
     public void ToggleBag()
@@ -786,8 +887,8 @@ public void ToggleShop()
             }
 
             isProcessing = false;
+            HideAlertImmediate();
             StopAllCoroutines();
-            alertCoroutine = null;
         }
     }
 
@@ -804,11 +905,7 @@ public void ToggleShop()
             canvas = FindObjectOfType<Canvas>();
         }
 
-        if (canvas == null)
-        {
-            Debug.LogWarning("Bag UI gagal dibuat karena Canvas tidak ditemukan.");
-            return;
-        }
+        if (canvas == null) return;
 
         if (bagButton == null)
         {
@@ -820,7 +917,7 @@ public void ToggleShop()
         {
             bagPanel = CreateUIPanel("BagPanel", canvas.transform, new Vector2(900f, 560f), new Vector2(0.5f, 0.5f), Vector2.zero);
 
-            TMP_Text titleText = CreateUIText("BagTitle", bagPanel.transform, "ARTEFAK NUSANTARA", 34f, FontStyles.Bold, TextAlignmentOptions.Center, lightTextColor);
+            TMP_Text titleText = CreateUIText("BagTitle", bagPanel.transform, "ARTIFACT GUIDE", 34f, FontStyles.Bold, TextAlignmentOptions.Center, lightTextColor);
             SetRect(titleText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0f, -46f), new Vector2(760f, 54f), new Vector2(0.5f, 0.5f));
 
             TMP_Text infoText = CreateUIText("BagInfo", bagPanel.transform, BuildArtifactGuideText(), 20f, FontStyles.Normal, TextAlignmentOptions.TopLeft, Color.white);
@@ -922,10 +1019,10 @@ public void ToggleShop()
             }
 
             guide += $"<color={artifact.rarityColorHex}>{artifact.rarity}</color> - {artifact.artifactName}\n";
-            guide += $"Depth: {artifact.recommendedDepthMin}-{artifact.recommendedDepthMax} | Chance: {artifact.idealChance}% | Setelah range: {artifact.outsideChance}% | Reward: +{artifact.rewardPoints}\n";
+            guide += $"Depth: {artifact.recommendedDepthMin}-{artifact.recommendedDepthMax} | Chance: {artifact.idealChance}% | Outside range: {artifact.outsideChance}% | Reward: +{artifact.rewardPoints} pts\n";
             if (artifact.recommendedDepthMin > 0)
             {
-                guide += $"Sebelum depth {artifact.recommendedDepthMin}: 0% chance.\n";
+                guide += $"Before depth {artifact.recommendedDepthMin}: 0% chance.\n";
             }
             guide += $"{artifact.description}\n\n";
         }
@@ -933,7 +1030,7 @@ public void ToggleShop()
         return guide.TrimEnd();
     }
 
-public void ShowAlert(string message)
+    public void ShowAlert(string message)
     {
         if (alertPanel != null && alertText != null)
         {
@@ -945,8 +1042,47 @@ public void ShowAlert(string message)
             alertCoroutine = StartCoroutine(AlertRoutine(message));
         }
     }
+
+    void ConfigureAlertAsNonBlocking()
+    {
+        if (alertPanel == null)
+        {
+            return;
+        }
+
+        CanvasGroup canvasGroup = alertPanel.GetComponent<CanvasGroup>();
+        if (canvasGroup == null)
+        {
+            canvasGroup = alertPanel.AddComponent<CanvasGroup>();
+        }
+
+        canvasGroup.interactable = false;
+        canvasGroup.blocksRaycasts = false;
+
+        Graphic[] graphics = alertPanel.GetComponentsInChildren<Graphic>(true);
+        for (int i = 0; i < graphics.Length; i++)
+        {
+            graphics[i].raycastTarget = false;
+        }
+    }
+
+    void HideAlertImmediate()
+    {
+        if (alertCoroutine != null)
+        {
+            StopCoroutine(alertCoroutine);
+            alertCoroutine = null;
+        }
+
+        if (alertPanel != null)
+        {
+            alertPanel.SetActive(false);
+        }
+    }
+
     IEnumerator AlertRoutine(string message)
     {
+        ConfigureAlertAsNonBlocking();
         alertText.text = message;
         alertPanel.SetActive(true);
         
@@ -961,6 +1097,17 @@ public void ShowAlert(string message)
         {
             sfxSource.PlayOneShot(clip);
         }
+    }
+
+    void PlayArtifactBark()
+    {
+        if (artifactBarkSounds == null || artifactBarkSounds.Length == 0)
+        {
+            return;
+        }
+
+        AudioClip clip = artifactBarkSounds[Random.Range(0, artifactBarkSounds.Length)];
+        PlaySFX(clip);
     }
     
 }

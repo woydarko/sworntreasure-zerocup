@@ -73,3 +73,14 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# --- Project-specific: unused source art & exports (not referenced by any scene) ---
+*.aseprite
+Assets/Scenes/ui & ux/*-export.png
+Assets/Scenes/ui & ux/*-export.png.meta
+Assets/Scenes/ui & ux/ChatGPT Image Jun 10, 2026, 10_43_16 PM 1.png
+Assets/Scenes/ui & ux/ChatGPT Image Jun 10, 2026, 10_43_16 PM 1.png.meta
+Assets/Scenes/ui & ux/logo st.png
+Assets/Scenes/ui & ux/logo st.png.meta
+Assets/Scenes/ui & ux/logo.png
+Assets/Scenes/ui & ux/logo.png.meta
